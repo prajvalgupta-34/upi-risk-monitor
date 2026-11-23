@@ -10,6 +10,7 @@ from scripts.db import get_connection
 st.set_page_config(page_title="UPI Risk & Payments Monitor", layout="wide")
 
 GENESIS_HASH = "0" * 64
+THRESHOLD = 66
 METRICS_PATH = os.path.join("data", "model_metrics.json")
 
 
@@ -260,7 +261,9 @@ if st.sidebar.button("Verify SHA-256 Audit Chain", width="stretch"):
         st.sidebar.error(f"Tampering detected at event_id={broken_id}")
 
 st.sidebar.divider()
-st.sidebar.caption(f"Data Source: **{'MySQL 8.0 (Local)' if backend_name == 'mysql' else 'SQLite Snapshot (Cloud Demo)'}**")
+st.sidebar.caption(
+    f"Data Source: **{'MySQL 8.0' if backend_name == 'mysql' else 'SQLite Demo Snapshot'}**"
+)
 
 
 # --- Main Header & Disclosure ---
@@ -281,7 +284,7 @@ with tab1:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total UPI Txns", f"{int(summary['total_txns']):,}")
     c2.metric("Success Rate", f"{success_rate:.2f}%")
-    c3.metric("Lost GMV (Failed + Pending)", format_inr(summary["lost_gmv"]))
+    c3.metric("Lost GMV", format_inr(summary["lost_gmv"]))
     c4.metric("Avg Gateway Latency", f"{summary['avg_latency']:.0f} ms")
 
     top_fail_bank = by_bank.iloc[0]
@@ -328,7 +331,7 @@ with tab1:
             x="txn_hour",
             y="failure_rate_pct",
             markers=True,
-            title="Hourly Failure Rate (Peak Window: 18:00–21:00)",
+            title="Hourly Failure Rate (18:00–21:00 Peak)",
             labels={"txn_hour": "Hour of Day", "failure_rate_pct": "Failure Rate (%)"},
         )
         fig_hour.add_vrect(x0=18, x1=21, fillcolor="red", opacity=0.12, line_width=0, annotation_text="Peak Hours")
@@ -356,9 +359,10 @@ with tab2:
     metrics_data = load_model_metrics()
     if metrics_data:
         st.subheader("Fraud Model Evaluation (Simulated Labels — 3.00% Class Imbalance)")
+        validation_label = metrics_data.get("validation_method", "5-fold stratified out-of-fold")
         st.caption(
-            "Evaluated across all 50,000 simulated transactions at default block threshold (>= 66). "
-            "PR-AUC is prioritized over ROC-AUC due to the 3.00% fraud class imbalance."
+            f"Evaluated via {validation_label} across 50,000 simulated transactions (3.00% fraud rate) "
+            f"at default block threshold (>= {THRESHOLD}). PR-AUC is prioritized over ROC-AUC under class imbalance."
         )
         eval_df = pd.DataFrame(metrics_data["models"])
         eval_df.columns = ["Model Variant", "Threshold", "Precision", "Recall", "F1 Score", "PR-AUC", "Flagged Txns"]
@@ -371,7 +375,7 @@ with tab2:
         "Auto-Block Risk Score Threshold",
         min_value=36,
         max_value=95,
-        value=66,
+        value=THRESHOLD,
         step=1,
         disabled=not can_adjust,
         help="Switch to RISK_ADMIN in the sidebar to modify live block thresholds.",
