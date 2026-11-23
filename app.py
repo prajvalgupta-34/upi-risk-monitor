@@ -62,8 +62,6 @@ def load_roles():
 
 @st.cache_data(ttl=60)
 def load_funnel_data():
-    backend = get_active_backend()
-
     summary = run_query("""
         SELECT
             COUNT(*) AS total_txns,
@@ -98,17 +96,32 @@ def load_funnel_data():
         ORDER BY impacted_gmv_inr DESC
     """)
 
-    hour_expr = "HOUR(txn_timestamp)" if backend == "mysql" else "CAST(strftime('%H', txn_timestamp) AS INTEGER)"
-    by_hour = run_query(f"""
+    raw_hours = run_query("""
         SELECT
-            {hour_expr} AS txn_hour,
-            COUNT(*) AS total_txns,
-            ROUND(100.0 * SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS failure_rate_pct,
-            ROUND(SUM(CASE WHEN status IN ('FAILED', 'PENDING') THEN amount_inr ELSE 0 END), 2) AS lost_gmv_inr
+            txn_timestamp,
+            status,
+            amount_inr
         FROM transactions
-        GROUP BY {hour_expr}
-        ORDER BY txn_hour
     """)
+    raw_hours["txn_hour"] = pd.to_datetime(raw_hours["txn_timestamp"]).dt.hour
+    raw_hours["amount_inr"] = pd.to_numeric(raw_hours["amount_inr"], errors="coerce")
+
+    by_hour = (
+        raw_hours.groupby("txn_hour", as_index=False)
+        .agg(
+            total_txns=("status", "count"),
+            failed_txns=("status", lambda s: (s == "FAILED").sum()),
+            lost_gmv_inr=(
+                "amount_inr",
+                lambda a: a[raw_hours.loc[a.index, "status"].isin(["FAILED", "PENDING"])].sum(),
+            ),
+        )
+        .sort_values("txn_hour")
+    )
+    by_hour["failure_rate_pct"] = (
+        100.0 * by_hour["failed_txns"] / by_hour["total_txns"]
+    ).round(2)
+    by_hour["lost_gmv_inr"] = by_hour["lost_gmv_inr"].round(2)
 
     for df in (summary, by_bank, by_reason, by_hour):
         for col in df.columns:
